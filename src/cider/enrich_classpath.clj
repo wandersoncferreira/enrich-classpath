@@ -5,6 +5,7 @@
    [cider.enrich-classpath.collections :refer [add-exclusions-if-classified divide-by ensure-no-lists flatten-deps maybe-normalize safe-sort]]
    [cider.enrich-classpath.locks :refer [read-file! write-file!]]
    [cider.enrich-classpath.logging :refer [debug info warn]]
+   [cider.enrich-classpath.source-analysis :refer [bad-source?]]
    [clojure.string :as string]
    [clojure.walk :as walk]
    [fipp.clojure])
@@ -131,12 +132,18 @@
                     (do
                       (info (str ::timed-out " " x))
                       [])
-                    (do
-                      (when (and (find v x)
-                                 (-> x (get 3) classifiers))
+                    (let [m1? (and (find v x)
+                                   (-> x (get 3) classifiers))
+                          m2? (and m1?
+                                   (not (bad-source? x)))]
+                      (when m2?
                         (info (str ::found " " (pr-str x))))
-                      ;; ensure the cache gets set to something:
-                      (doto v assert))))
+                      (if (and m1? (not m2?))
+                        (do
+                          (info (str ::omitting-empty-source " " (pr-str x)))
+                          [])
+                        ;; ensure the cache gets set to something:
+                        (doto v assert)))))
                 (catch AbstractMethodError e
                   ;; Catches:
 
@@ -276,7 +283,9 @@
                                                 (mapcat (partial derivatives
                                                                  classifiers
                                                                  managed-dependencies
-                                                                 memoized-resolve!)))))
+                                                                 memoized-resolve!))
+                                                ;; ensure the work is done within the pmap thread:
+                                                (vec))))
                                    (apply concat)
                                    (distinct)
                                    (filter (fn [[_ _ _ x]]
@@ -309,7 +318,7 @@
 
 (defn wrap-failsafe
   "Wraps `f` in a 'failsafe' way, protecting it against exceptions and overly slow executions."
-  [f timeout]
+  [f ^long timeout]
   {:pre [(ifn? f)
          (pos? timeout)
          (integer? timeout)]}
